@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Tuple
+from typing import Any, List, Tuple
 
 import torch
 from datasets import Dataset, DatasetDict, DatasetInfo
@@ -290,14 +290,17 @@ class BatchInferenceWithEval:
             self.run_metrics_str = ""
         self.initial_predictions: list[str] = []
 
-    def generate(self, prompt: str) -> Any:
+    def generate(self, prompts: List[str]) -> Any:
         """Generate a completion from a prompt."""
-        tokenized_prompt = self.tokenizer(prompt, return_tensors="pt", padding=True)["input_ids"].cuda()
+        tokenized_prompts = self.tokenizer(prompts, return_tensors="pt", padding=True)["input_ids"].cuda()
         with torch.inference_mode():
             output = self.model.generate(
-                inputs=tokenized_prompt, generation_config=self.gen_config, pad_token_id=self.tokenizer.eos_token_id
+                inputs=tokenized_prompts,
+                generation_config=self.gen_config,
+                pad_token_id=self.tokenizer.eos_token_id,
             )
-        return self.tokenizer.decode(output[0][len(tokenized_prompt[0]) :], skip_special_tokens=True)
+        decoded_outputs = self.tokenizer.batch_decode(output, skip_special_tokens=True)
+        return [output[len(tokens) :] for tokens, output in zip(tokenized_prompts, decoded_outputs)]
 
     def run_initial_predictions(self, rows: Dataset) -> Tuple[list[dict[str, Any]], Tuple[Table, dict[str, Any]]]:
         """Generate initial predictions for the sample split."""
@@ -311,34 +314,50 @@ class BatchInferenceWithEval:
         self.execute_custom_code(test_rows)
 
         print("Generating initial predictions for sample split")
-        predicted_rows = []
-        for example in tqdm(rows, leave=False):
-            if self.task == "text":
-                prompt = example["text"]
-            else:
-                prompt = example["prompt"]
+        prompts = []
+        prompt_column = ""
+        if self.task == "text":
+            prompt_column = "text"
+        else:
+            prompt_column = "prompt"
+        for example in rows:
+            prompt = example[prompt_column]
             if not prompt.startswith(self.tokenizer.bos_token):
                 prompt = f"{self.tokenizer.bos_token}{prompt}"
-            predicted = self.generate(prompt=prompt)
-            self.initial_predictions.append(predicted)
-            actual = example["completion"]
-            predicted_rows.append({"prompt": prompt, "actual": actual, "predicted": predicted, "initial": predicted})
+            prompts.append(prompt)
+
+        self.initial_predictions = self.generate(prompts=prompts)
+        predicted_rows = [
+            {
+                "prompt": example[prompt_column],
+                "actual": example["completion"],
+                "predicted": predicted,
+                "initial": predicted,
+            }
+            for example, predicted in zip(rows, self.initial_predictions)
+        ]
         return predicted_rows, self.execute_custom_code(predicted_rows)
 
     def infer(self, rows: Dataset) -> Tuple[list[dict[str, Any]], Tuple[Table, dict[str, Any]]]:
         """Generate batch predictions."""
         print("Generating predictions for sample split")
-        predicted_rows = []
-        for i, example in tqdm(enumerate(rows), leave=False):
-            if self.task == "text":
-                prompt = example["text"]
-            else:
-                prompt = example["prompt"]
-            actual = example["completion"]
+        prompts = []
+        prompt_column = ""
+
+        if self.task == "text":
+            prompt_column = "text"
+        else:
+            prompt_column = "prompt"
+        for example in rows:
+            prompt = example[prompt_column]
             if not prompt.startswith(self.tokenizer.bos_token):
                 prompt = f"{self.tokenizer.bos_token}{prompt}"
-            predicted = self.generate(prompt=prompt)
-            row_obj = {"prompt": prompt, "actual": actual, "predicted": predicted}
+            prompts.append(prompt)
+
+        predicted = self.generate(prompts=prompts)
+        predicted_rows = []
+        for i, p in enumerate(predicted):
+            row_obj = {"prompt": rows[i][prompt_column], "actual": rows[i]["completion"], "predicted": p}
             if self.initial_predictions:
                 row_obj["initial"] = self.initial_predictions[i]
             predicted_rows.append(row_obj)
