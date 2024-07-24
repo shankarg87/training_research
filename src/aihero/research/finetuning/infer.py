@@ -37,27 +37,28 @@ class BatchInferenceJobRunner:
         if self.batch_inference_job.eval:
             run_tests_str = self.batch_inference_job.eval.tests or ""
             run_metrics_str = self.batch_inference_job.eval.metrics or ""
-            size = self.batch_inference_job.size or 0
-            randomize = self.batch_inference_job.randomize or False
+            size = self.batch_inference_job.eval.size or 0
+            randomize = self.batch_inference_job.eval.randomize or False
         else:
             run_tests_str = ""
             run_metrics_str = ""
             size = 0
             randomize = False
 
+        print(self.dataset_dict)
         self.batch_inference_split = self.dataset_dict["batch_inference"]
         if size:
             if randomize:
                 self.batch_inference_split = self.batch_inference_split.shuffle()
             self.batch_inference_split = self.batch_inference_split.select(range(size))
-            self.batch_inference_with_eval = BatchInferenceWithEval(
-                model=self.model,
-                tokenizer=self.tokenizer,
-                task=self.batch_inference_job.task,
-                run_tests_str=run_tests_str,
-                run_metrics_str=run_metrics_str,
-                max_new_tokens=self.batch_inference_job.generator.max_seq_length or MAX_NEW_TOKENS,
-            )
+        self.batch_inference_with_eval = BatchInferenceWithEval(
+            model=self.model,
+            tokenizer=self.tokenizer,
+            task=self.batch_inference_job.task,
+            run_tests_str=run_tests_str,
+            run_metrics_str=run_metrics_str,
+            max_new_tokens=self.batch_inference_job.generator.max_seq_length or MAX_NEW_TOKENS,
+        )
 
     def load_model(self) -> Tuple[AutoModelForCausalLM, AutoTokenizer]:
         """Load the model from HuggingFace Hub or S3."""
@@ -173,45 +174,17 @@ class BatchInferenceJobRunner:
             )
         elif self.batch_inference_job.dataset.type == "local":
             print("Loading dataset locally: ", os.listdir(self.batch_inference_job.dataset.path))
-            splits["train"] = Dataset.from_generator(
+            splits["batch_inference"] = Dataset.from_generator(
                 dataset_generator,
                 gen_kwargs={
                     "dataset": self.batch_inference_job.dataset.path,
-                    "split": "train",
+                    "split": "batch_inference",
                     "from_disk": True,
                     "task": self.batch_inference_job.task,
                     "bos_token": bos_token,
                     "eos_token": eos_token,
                 },
             )
-            try:
-                splits["val"] = Dataset.from_generator(
-                    dataset_generator,
-                    gen_kwargs={
-                        "dataset": self.batch_inference_job.dataset.path,
-                        "split": "val",
-                        "from_disk": True,
-                        "task": self.batch_inference_job.task,
-                        "bos_token": bos_token,
-                        "eos_token": eos_token,
-                    },
-                )
-            except:  # pylint: disable=bare-except  # noqa: E722
-                print("Unable to create val dataset")
-            try:
-                splits["test"] = Dataset.from_generator(
-                    dataset_generator,
-                    gen_kwargs={
-                        "dataset": self.batch_inference_job.dataset.path,
-                        "split": "test",
-                        "from_disk": True,
-                        "task": self.batch_inference_job.task,
-                        "bos_token": bos_token,
-                        "eos_token": eos_token,
-                    },
-                )
-            except:  # pylint: disable=bare-except  # noqa: E722
-                print("Unable to create test dataset")
         else:
             raise ValueError(f"Unknown dataset_type: {self.batch_inference_job.dataset.type}")
 
@@ -276,6 +249,10 @@ class BatchInferenceWithEval:
         """Initialize the batch inference class."""
         self.gen_config = GenerationConfig.from_pretrained(model.name_or_path, max_new_tokens=max_new_tokens)
         self.model = model
+
+        # temporary, please remove
+        model.eval()
+
         self.tokenizer = tokenizer
         self.task = task
         self.run_tests_str = run_tests_str
@@ -295,7 +272,10 @@ class BatchInferenceWithEval:
         tokenized_prompt = self.tokenizer(prompt, return_tensors="pt", padding=True)["input_ids"].cuda()
         with torch.inference_mode():
             output = self.model.generate(
-                inputs=tokenized_prompt, generation_config=self.gen_config, pad_token_id=self.tokenizer.eos_token_id
+                inputs=tokenized_prompt,
+                generation_config=self.gen_config,
+                pad_token_id=self.tokenizer.eos_token_id,
+                repetition_penalty=1.2,
             )
         return self.tokenizer.decode(output[0][len(tokenized_prompt[0]) :], skip_special_tokens=True)
 
