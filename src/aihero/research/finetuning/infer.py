@@ -45,7 +45,7 @@ class BatchInferenceJobRunner:
             size = 0
             randomize = False
 
-        print(self.dataset_dict)
+        self.model.eval()
         self.batch_inference_split = self.dataset_dict["batch_inference"]
         if size:
             if randomize:
@@ -58,6 +58,7 @@ class BatchInferenceJobRunner:
             run_tests_str=run_tests_str,
             run_metrics_str=run_metrics_str,
             max_new_tokens=self.batch_inference_job.generator.max_seq_length or MAX_NEW_TOKENS,
+            batch_size=8,  # Needs to be added to eval arguments
         )
 
     def load_model(self) -> Tuple[AutoModelForCausalLM, AutoTokenizer]:
@@ -249,6 +250,7 @@ class BatchInferenceWithEval:
         """Initialize the batch inference class."""
         self.gen_config = GenerationConfig.from_pretrained(model.name_or_path, max_new_tokens=max_new_tokens)
         self.model = model
+        self.batch_size = batch_size
         self.tokenizer = tokenizer
         self.task = task
         self.run_tests_str = run_tests_str
@@ -265,15 +267,21 @@ class BatchInferenceWithEval:
 
     def generate(self, prompts: List[str]) -> Any:
         """Generate a completion from a prompt."""
-        tokenized_prompts = self.tokenizer(prompts, return_tensors="pt", padding=True)["input_ids"].cuda()
+        tokens = self.tokenizer(prompts, return_tensors="pt", padding=True)
+        outputs = []
         with torch.inference_mode():
-            output = self.model.generate(
-                inputs=tokenized_prompts,
-                generation_config=self.gen_config,
-                pad_token_id=self.tokenizer.eos_token_id,
-            )
-        decoded_outputs = self.tokenizer.batch_decode(output, skip_special_tokens=True)
-        return [output[len(tokens) :] for tokens, output in zip(tokenized_prompts, decoded_outputs)]
+            for i in tqdm(range(0, len(prompts), self.batch_size), leave=False):
+                output = self.model.generate(
+                    inputs=tokens["input_ids"][i : i + self.batch_size].cuda(),
+                    attention_mask=tokens["attention_mask"][i : i + self.batch_size].cuda(),
+                    generation_config=self.gen_config,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    repetition_penalty=1.2,  # TODO: Add to generation config?
+                    num_return_sequences=1,
+                )
+                outputs += output
+        decoded_outputs = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        return [output[len(tokens) :] for tokens, output in zip(tokens["input_ids"].cuda(), decoded_outputs)]
 
     def run_initial_predictions(self, rows: Dataset) -> Tuple[list[dict[str, Any]], Tuple[Table, dict[str, Any]]]:
         """Generate initial predictions for the sample split."""

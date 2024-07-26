@@ -115,11 +115,10 @@ def peft_module_casting_to_bf16(model: AutoModelForCausalLM, args: dict[str, str
     """Cast the PEFT model to bf16."""
     for name, module in model.named_modules():
         if isinstance(module, LoraLayer):
-            if args.get("bf16", "false").lower() == "true":
-                module = module.to(torch.bfloat16)
+            module = module.to(torch.bfloat16)
         if "norm" in name:
             module = module.to(torch.float32)
         if any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
             if hasattr(module, "weight"):
-                if args["bf16"] and module.weight.dtype == torch.float32:
+                if module.weight.dtype == torch.float32:
                     module = module.to(torch.bfloat16)

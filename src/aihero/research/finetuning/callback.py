@@ -36,6 +36,7 @@ class LLMSampleCB(WandbCallback):  # type: ignore
             run_tests_str=run_tests_str,
             run_metrics_str=run_metrics_str,
             max_new_tokens=max_new_tokens,
+            batch_size=trainer.args.per_device_eval_batch_size,
         )
 
         # Sample a few rows from the test split to generate a table of predictions
@@ -56,7 +57,9 @@ class LLMSampleCB(WandbCallback):  # type: ignore
         """Generate initial predictions for the sample split and log them to WANDB."""
         self._wandb.init()
 
+        self.batch_inference.model.eval()
         _, (records_table, metrics) = self.batch_inference.run_initial_predictions(self.sample_split)
+        self.batch_inference.model.train()
 
         # Log the table of sample predictions to W&B
         self._wandb.log({"sample_predictions": records_table})
@@ -69,8 +72,10 @@ class LLMSampleCB(WandbCallback):  # type: ignore
         """Log the sample predictions and metrics to WANDB on eval callback."""
         super().on_evaluate(args, state, control, **kwargs)
 
+        self.batch_inference.model.eval()
         # Generate the table of sample predictions
         _, (records_table, metrics) = self.batch_inference.infer(self.sample_split)
+        self.batch_inference.model.train()
 
         # Log the table of sample predictions to W&B
         self._wandb.log({"sample_predictions": records_table})
