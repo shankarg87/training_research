@@ -1,4 +1,5 @@
 """Launch the training job inside a container."""
+import gc
 import os
 import time
 import traceback
@@ -428,3 +429,13 @@ class TrainingJobRunner:
         print("Saving model..")
         self.save_model()
         finish()
+
+    def cleanup(self) -> None:
+        """Clean up memory useage."""
+        del self.model
+        del self.tokenizer
+        del self.dataset_dict
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+        gc.collect()

@@ -1,4 +1,5 @@
 """Module to run batch inference jobs."""
+import gc
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -232,6 +233,16 @@ class BatchInferenceJobRunner:
         self.infer_on_dataset()
         print("Save and Uploading model..")
         finish()
+
+    def cleanup(self) -> None:
+        """Clean up memory useage."""
+        del self.model
+        del self.tokenizer
+        del self.dataset_dict
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+        gc.collect()
 
 
 class BatchInferenceWithEval:
